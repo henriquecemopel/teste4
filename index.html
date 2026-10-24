@@ -11,14 +11,15 @@
         .header { padding: 15px; background: #252525; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
         .select-unit { padding: 8px; background: #333; color: #fff; border: 1px solid #444; border-radius: 6px; }
         .messages-box { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-        .msg { padding: 10px 14px; border-radius: 8px; max-width: 75%; font-size: 0.9rem; line-height: 1.4; }
+        .msg { padding: 10px 14px; border-radius: 8px; max-width: 75%; font-size: 0.9rem; line-height: 1.4; word-break: break-word; }
         .msg-u1 { background: #1b3a4b; align-self: flex-start; border-left: 3px solid #00b4d8; }
         .msg-u2 { background: #2d3a1e; align-self: flex-end; border-right: 3px solid #52b788; }
-        .msg-header { font-size: 0.75rem; color: #aaa; margin-bottom: 4px; display: flex; justify-content: space-between; }
+        .msg-header { font-size: 0.75rem; color: #aaa; margin-bottom: 4px; display: flex; justify-content: space-between; gap: 10px; }
         .input-area { padding: 15px; background: #252525; display: flex; gap: 10px; border-top: 1px solid #333; }
         input { flex: 1; padding: 10px; background: #333; border: 1px solid #444; border-radius: 6px; color: #fff; outline: none; }
+        input:disabled, button:disabled { opacity: 0.6; cursor: not-allowed; }
         button { padding: 10px 18px; background: #0077b6; border: none; color: white; font-weight: bold; border-radius: 6px; cursor: pointer; }
-        button:hover { background: #0096c7; }
+        button:hover:not(:disabled) { background: #0096c7; }
     </style>
 </head>
 <body>
@@ -33,21 +34,26 @@
     </div>
 
     <div class="messages-box" id="messagesBox">
-        <!-- As mensagens vindas do arquivo .json serão desenhadas aqui -->
+        <!-- As mensagens vindas do Google Script serão desenhadas aqui -->
     </div>
 
     <div class="input-area">
         <input type="text" id="msgText" placeholder="Digite sua mensagem..." onkeypress="if(event.key==='Enter') enviarMensagem()">
-        <button onclick="enviarMensagem()">Enviar</button>
+        <button id="btnEnviar" onclick="enviarMensagem()">Enviar</button>
     </div>
 </div>
 
 <script>
-    // URL do servidor/API que realmente grava no arquivo mensagens.json
-    const ENDPOINT_API = "https://script.google.com/macros/s/AKfycbwKeCXq1Cbgy1Y06KwaLqwF3BX27znj_fPVlOPzrS9EpMr1tuQu6qTqb_9w8Pgkej0g/exec";
+    // URL atualizada do seu Web App no Apps Script
+    const ENDPOINT_API = "https://script.google.com/macros/s/AKfycbxvG_AZGXqTkcpouGbR3bgyQ1tuem8WRaNtvO_KBZtuQtMEwbs0E4DRwT9qrDReZLNU/exec";
+    
+    let carregando = false;
 
-    // 1. LER AS MENSAGENS DO ARQUIVO SEPARADO (JSON)
+    // 1. LER AS MENSAGENS
     async function carregarMensagens() {
+        if (carregando) return;
+        carregando = true;
+
         try {
             const resposta = await fetch(ENDPOINT_API);
             const dadosJson = await resposta.json();
@@ -55,29 +61,44 @@
             const box = document.getElementById('messagesBox');
             box.innerHTML = '';
 
-            // Desenha na tela só o que está gravado no arquivo JSON
             dadosJson.forEach(item => {
                 const div = document.createElement('div');
                 div.className = `msg ${item.unidade === 'Unidade 1' ? 'msg-u1' : 'msg-u2'}`;
-                div.innerHTML = `
-                    <div class="msg-header">
-                        <strong>${item.unidade}</strong>
-                        <span>${item.horario}</span>
-                    </div>
-                    <div>${item.texto}</div>
-                `;
+                
+                // Cabeçalho da mensagem (Unidade e Horário)
+                const msgHeader = document.createElement('div');
+                msgHeader.className = 'msg-header';
+                
+                const strongUnidade = document.createElement('strong');
+                strongUnidade.textContent = item.unidade || 'Sem Unidade';
+                
+                const spanHorario = document.createElement('span');
+                spanHorario.textContent = item.horario || '';
+                
+                msgHeader.appendChild(strongUnidade);
+                msgHeader.appendChild(spanHorario);
+
+                // Texto da mensagem (protegido contra XSS usando textContent)
+                const msgTexto = document.createElement('div');
+                msgTexto.textContent = item.texto || '';
+
+                div.appendChild(msgHeader);
+                div.appendChild(msgTexto);
                 box.appendChild(div);
             });
 
             box.scrollTop = box.scrollHeight;
         } catch (erro) {
-            console.error("Aguardando servidor de salvamento ou arquivo JSON...", erro);
+            console.error("Erro ao carregar mensagens:", erro);
+        } finally {
+            carregando = false;
         }
     }
 
-    // 2. ENVIAR A NOVA MENSAGEM PARA GRAVAR NO ARQUIVO SEPARADO (JSON)
+    // 2. ENVIAR A NOVA MENSAGEM
     async function enviarMensagem() {
         const input = document.getElementById('msgText');
+        const btn = document.getElementById('btnEnviar');
         const unidade = document.getElementById('unitSelect').value;
         const texto = input.value.trim();
 
@@ -89,23 +110,38 @@
             horario: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
 
-        // Envia o dado via POST para o arquivo JSON separado
-        await fetch(ENDPOINT_API, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(novaMensagem)
-        });
+        // Bloqueia os elementos enquanto envia
+        input.disabled = true;
+        btn.disabled = true;
 
-        input.value = '';
-        carregarMensagens(); // Atualiza a tela após salvar no JSON
+        try {
+            // 'mode: no-cors' e 'text/plain' garantem o envio correto para o Apps Script
+            await fetch(ENDPOINT_API, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify(novaMensagem)
+            });
+
+            input.value = '';
+            
+            // Aguarda 600ms para o servidor salvar antes de buscar novamente
+            setTimeout(carregarMensagens, 600);
+        } catch (erro) {
+            console.error("Erro ao enviar mensagem:", erro);
+        } finally {
+            input.disabled = false;
+            btn.disabled = false;
+            input.focus();
+        }
     }
 
     function trocarUnidade() {
         carregarMensagens();
     }
 
-    // Recarrega as mensagens a cada 2 segundos para ver novas mensagens enviadas
-    setInterval(carregarMensagens, 2000);
+    // Atualiza as mensagens a cada 3.5 segundos
+    setInterval(carregarMensagens, 3500);
     carregarMensagens();
 </script>
 
